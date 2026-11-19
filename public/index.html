@@ -1,0 +1,1037 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IoT Platform - Hệ thống Điều khiển & Giám sát ESP32</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+        .sidebar-item.active {
+            background-color: rgba(20, 184, 166, 0.15);
+            color: #2dd4bf;
+            border-right: 3px solid #14b8a6;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-800 antialiased">
+
+    <!-- ==================== 1. ĐĂNG NHẬP / ĐĂNG KÝ ==================== -->
+    <div id="auth-screen" class="min-h-screen flex flex-col md:flex-row bg-white">
+        <div class="w-full md:w-1/2 bg-[#d5f0ee] flex flex-col items-center justify-center p-8">
+            <div class="text-center mb-6">
+                <h2 class="text-2xl md:text-3xl font-bold text-[#0f8a8d]">Welcome to</h2>
+                <div class="text-4xl md:text-5xl font-extrabold text-[#f58220] mt-1">IoT<span class="text-[#0f8a8d]">-</span>ESP32</div>
+                <p class="text-xs text-[#0f8a8d] mt-2 font-medium">Nền tảng kết nối & điều khiển phần cứng đa người dùng</p>
+            </div>
+            <svg viewBox="0 0 400 320" class="w-full max-w-md drop-shadow-md">
+                <ellipse cx="200" cy="220" rx="165" ry="85" fill="#b2e2df" />
+                <polygon points="200,135 270,170 200,205 130,170" fill="#0f8a8d" />
+                <polygon points="130,170 200,205 200,218 130,183" fill="#096366" />
+                <polygon points="270,170 200,205 200,218 270,183" fill="#0c777a" />
+                <polygon points="200,145 252,170 200,195 148,170" fill="#a7e3e0" />
+                <g transform="translate(0, -15)">
+                    <polygon points="200,75 225,87 200,99 175,87" fill="#ff9f43" />
+                    <polygon points="175,87 200,99 200,124 175,112" fill="#ee7600" />
+                    <polygon points="225,87 200,99 200,124 225,112" fill="#f58220" />
+                </g>
+            </svg>
+        </div>
+
+        <div class="w-full md:w-1/2 flex items-center justify-center p-8 md:p-16 bg-white">
+            <div class="w-full max-w-sm">
+                <!-- Chọn Cổng Đăng nhập: Người dùng vs Admin -->
+                <div id="role-selector-tabs" class="grid grid-cols-2 bg-gray-100 p-1 rounded-full mb-6 text-xs font-semibold">
+                    <button type="button" id="btn-role-user" onclick="selectLoginRole('user')" class="py-2 rounded-full bg-white text-[#0f8a8d] shadow-sm transition">
+                        Người dùng
+                    </button>
+                    <button type="button" id="btn-role-admin" onclick="selectLoginRole('admin')" class="py-2 rounded-full text-gray-500 hover:text-gray-800 transition">
+                        Quản trị Admin
+                    </button>
+                </div>
+
+                <h1 id="auth-title" class="text-2xl font-bold text-gray-800 mb-2">Đăng nhập Người dùng</h1>
+                <p id="auth-subtitle" class="text-xs text-gray-400 mb-6">Quản lý dự án và điều khiển mạch ESP32 của bạn</p>
+
+                <form id="auth-form" class="space-y-5">
+                    <input type="text" id="auth-username" required placeholder="Tên đăng nhập"
+                        class="w-full border-b border-gray-300 py-2.5 text-sm focus:outline-none focus:border-[#0f8a8d]">
+                    <input type="password" id="auth-password" required placeholder="Mật khẩu"
+                        class="w-full border-b border-gray-300 py-2.5 text-sm focus:outline-none focus:border-[#0f8a8d]">
+                    <button type="submit" id="auth-submit-btn"
+                        class="w-full bg-[#0f8a8d] hover:bg-[#0c7275] text-white font-medium py-3 rounded-full text-sm transition">
+                        Đăng nhập
+                    </button>
+                </form>
+
+                <p id="auth-switch-wrapper" class="mt-8 text-center text-xs text-gray-500">
+                    <span id="auth-switch-text">Chưa có tài khoản?</span>
+                    <button type="button" onclick="switchAuthMode()" id="auth-switch-btn" class="text-[#f58220] font-semibold hover:underline ml-1">Đăng ký ngay</button>
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== 2. GIAO DIỆN CHÍNH ==================== -->
+    <div id="app-screen" class="hidden min-h-screen flex flex-col md:flex-row">
+        <aside class="w-full md:w-64 bg-[#111827] text-gray-300 flex flex-col shrink-0">
+            <div class="p-5 border-b border-gray-800 flex items-center justify-between">
+                <div class="flex items-center gap-2.5 text-white font-bold text-lg">
+                    <i data-lucide="cpu" class="w-6 h-6 text-sky-400"></i>
+                    <span>IoT Platform</span>
+                </div>
+                <span id="mqtt-badge" class="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400">ĐANG NỐI...</span>
+            </div>
+
+            <nav class="flex-1 py-3 space-y-0.5 text-sm">
+                <button onclick="switchTab('overview', this)" class="sidebar-item active w-full flex items-center gap-3 px-5 py-3 hover:bg-gray-800/60 text-left">
+                    <i data-lucide="layout-grid" class="w-4 h-4 text-sky-400"></i><span>Tổng quan</span>
+                </button>
+                <button onclick="switchTab('projects', this)" class="sidebar-item w-full flex items-center gap-3 px-5 py-3 hover:bg-gray-800/60 text-left">
+                    <i data-lucide="folder" class="w-4 h-4 text-sky-400"></i><span>Quản lý dự án</span>
+                </button>
+                <button onclick="switchTab('devices', this)" class="sidebar-item w-full flex items-center gap-3 px-5 py-3 hover:bg-gray-800/60 text-left">
+                    <i data-lucide="microchip" class="w-4 h-4 text-sky-400"></i><span>Quản lý thiết bị</span>
+                </button>
+                <button onclick="switchTab('control', this)" class="sidebar-item w-full flex items-center gap-3 px-5 py-3 hover:bg-gray-800/60 text-left">
+                    <i data-lucide="sliders" class="w-4 h-4 text-sky-400"></i><span>Điều khiển thiết bị</span>
+                </button>
+                <button onclick="switchTab('sensors', this)" class="sidebar-item w-full flex items-center gap-3 px-5 py-3 hover:bg-gray-800/60 text-left">
+                    <i data-lucide="activity" class="w-4 h-4 text-sky-400"></i><span>Giám sát cảm biến</span>
+                </button>
+                <button onclick="switchTab('logs', this)" class="sidebar-item w-full flex items-center gap-3 px-5 py-3 hover:bg-gray-800/60 text-left">
+                    <i data-lucide="history" class="w-4 h-4 text-sky-400"></i><span>Nhật ký tín hiệu</span>
+                </button>
+                <button onclick="switchTab('guide', this)" class="sidebar-item w-full flex items-center gap-3 px-5 py-3 hover:bg-gray-800/60 text-left">
+                    <i data-lucide="book-open" class="w-4 h-4 text-amber-400"></i><span class="text-amber-200 font-medium">Hướng dẫn & Cài đặt</span>
+                </button>
+                <!-- MỤC DÀNH RIÊNG CHO ADMIN -->
+                <button id="menu-admin-tab" onclick="switchTab('admin', this)" class="hidden sidebar-item w-full flex items-center gap-3 px-5 py-3 hover:bg-gray-800/60 text-left border-t border-gray-800 mt-2 pt-3">
+                    <i data-lucide="shield-check" class="w-4 h-4 text-rose-400"></i><span class="text-rose-300 font-semibold">Quản trị Hệ thống</span>
+                </button>
+            </nav>
+
+            <div class="p-4 border-t border-gray-800 flex items-center justify-between text-xs">
+                <div>
+                    <span class="text-gray-400">Tài khoản:</span> <strong id="display-username" class="text-white">---</strong>
+                    <span id="display-role-badge" class="ml-1 px-1.5 py-0.5 rounded text-[10px] bg-sky-500/20 text-sky-300">USER</span>
+                </div>
+                <button onclick="logout()" class="text-rose-400 hover:underline">Thoát</button>
+            </div>
+        </aside>
+
+        <main class="flex-1 bg-white p-6 md:p-8 overflow-y-auto">
+            
+            <!-- TAB 1: TỔNG QUAN -->
+            <div id="tab-overview" class="tab-content space-y-6">
+                <div class="flex items-center justify-between">
+                    <h2 class="text-xl font-bold text-gray-900">Tổng quan hệ thống</h2>
+                    <button onclick="openModal('project-modal')" class="bg-[#0f8a8d] text-white text-xs font-medium px-4 py-2 rounded-lg">+ Tạo dự án mới</button>
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div class="bg-[#e8f5e9] rounded-xl p-5 border border-emerald-100">
+                        <p class="text-xs text-gray-600">Thiết bị ESP32 trực tuyến</p>
+                        <p id="stat-online-devices" class="text-3xl font-bold text-[#1b5e20] mt-2">00</p>
+                    </div>
+                    <div class="bg-[#eef2ff] rounded-xl p-5 border border-indigo-100">
+                        <p class="text-xs text-gray-600">Tổng dự án của tôi</p>
+                        <p id="stat-total-projects" class="text-3xl font-bold text-gray-900 mt-2">00</p>
+                    </div>
+                </div>
+                <div>
+                    <h3 class="text-base font-bold text-gray-900 mb-4">Dự án của tôi</h3>
+                    <div id="overview-project-list" class="space-y-3"></div>
+                </div>
+            </div>
+
+            <!-- TAB 2: QUẢN LÝ DỰ ÁN (ĐÃ CÓ NÚT XÓA DỰ ÁN) -->
+            <div id="tab-projects" class="tab-content hidden space-y-6">
+                <div class="flex items-center justify-between">
+                    <h2 class="text-xl font-bold text-gray-900">Quản lý dự án</h2>
+                    <button onclick="openModal('project-modal')" class="bg-[#0f8a8d] text-white text-xs font-medium px-4 py-2 rounded-lg">+ Tạo dự án mới</button>
+                </div>
+                <div id="projects-grid" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
+            </div>
+
+            <!-- TAB 3: QUẢN LÝ THIẾT BỊ (ĐÃ CÓ NÚT XÓA ESP32) -->
+            <div id="tab-devices" class="tab-content hidden space-y-6">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <h2 class="text-xl font-bold text-gray-900">Quản lý thiết bị ESP32</h2>
+                        <p class="text-xs text-gray-500 mt-1">Thêm mạch ESP32 vào dự án để lấy mã Device Token</p>
+                    </div>
+                    <button onclick="openNewDeviceModal()" class="bg-[#0f8a8d] text-white text-xs font-medium px-4 py-2 rounded-lg">+ Thêm ESP32 mới</button>
+                </div>
+                <div id="devices-table-container" class="border border-gray-200 rounded-xl overflow-x-auto"></div>
+            </div>
+
+            <!-- TAB 4: ĐIỀU KHIỂN THIẾT BỊ -->
+            <div id="tab-control" class="tab-content hidden space-y-6">
+                <div id="control-view-container"></div>
+            </div>
+
+            <!-- TAB 5: GIÁM SÁT CẢM BIẾN -->
+            <div id="tab-sensors" class="tab-content hidden space-y-6">
+                <div id="sensor-view-container"></div>
+            </div>
+
+            <!-- TAB 6: NHẬT KÝ -->
+            <div id="tab-logs" class="tab-content hidden space-y-4">
+                <h2 class="text-xl font-bold text-gray-900">Nhật ký tín hiệu thời gian thực</h2>
+                <ul id="activity-log-list" class="border border-gray-200 rounded-xl divide-y text-xs text-gray-600 max-h-96 overflow-y-auto">
+                    <li class="p-4 text-gray-400">Chưa có tín hiệu nào...</li>
+                </ul>
+            </div>
+
+            <!-- TAB 7: HƯỚNG DẪN & CÀI ĐẶT -->
+            <div id="tab-guide" class="tab-content hidden space-y-6 max-w-4xl">
+                <div>
+                    <h2 class="text-xl font-bold text-gray-900">Hướng dẫn cài đặt & Kết nối ESP32 với Web</h2>
+                    <p class="text-xs text-gray-500 mt-1">Làm theo đúng 4 bước dưới đây để mạch ESP32 nhận lệnh điều khiển và gửi cảm biến lên trang web này.</p>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                    <div class="border border-gray-200 rounded-xl p-5 space-y-2">
+                        <span class="px-2.5 py-1 rounded-full bg-sky-50 text-sky-700 font-bold">Bước 1</span>
+                        <h3 class="text-sm font-bold text-gray-900 pt-1">Tạo Dự án & Thêm mạch ESP32</h3>
+                        <p class="text-gray-600 leading-relaxed">Vào mục <strong>Quản lý dự án</strong> để tạo dự án. Sang mục <strong>Quản lý thiết bị</strong> bấm <em>+ Thêm ESP32 mới</em> để nhận mã <strong>Device Token</strong>.</p>
+                    </div>
+                    <div class="border border-gray-200 rounded-xl p-5 space-y-2">
+                        <span class="px-2.5 py-1 rounded-full bg-sky-50 text-sky-700 font-bold">Bước 2</span>
+                        <h3 class="text-sm font-bold text-gray-900 pt-1">Cài thư viện trên Arduino IDE</h3>
+                        <p class="text-gray-600 leading-relaxed">Mở Arduino IDE &rarr; <strong>Sketch &rarr; Include Library &rarr; Manage Libraries</strong> &rarr; cài thư viện <strong>PubSubClient</strong> (của Nick O'Leary).</p>
+                    </div>
+                    <div class="border border-gray-200 rounded-xl p-5 space-y-2">
+                        <span class="px-2.5 py-1 rounded-full bg-sky-50 text-sky-700 font-bold">Bước 3</span>
+                        <h3 class="text-sm font-bold text-gray-900 pt-1">Nạp code mẫu xuống ESP32</h3>
+                        <p class="text-gray-600 leading-relaxed">Chọn đúng tên mạch ESP32 của bạn ở khung code bên dưới, bấm <strong>Copy toàn bộ Code</strong>, điền tên Wi-Fi &amp; mật khẩu rồi nạp vào ESP32.</p>
+                    </div>
+                    <div class="border border-gray-200 rounded-xl p-5 space-y-2">
+                        <span class="px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 font-bold">Bước 4</span>
+                        <h3 class="text-sm font-bold text-gray-900 pt-1">Cấu hình chân GPIO trực tiếp trên Web</h3>
+                        <p class="text-gray-600 leading-relaxed">Vào mục <strong>Điều khiển thiết bị</strong> hoặc <strong>Giám sát cảm biến</strong> &rarr; bấm chọn con ESP32 &rarr; khai báo chân GPIO bạn đấu nối và dùng ngay.</p>
+                    </div>
+                </div>
+
+                <div class="border border-gray-200 rounded-xl overflow-hidden">
+                    <div class="bg-gray-900 text-gray-200 px-4 py-3 flex flex-wrap items-center justify-between gap-2 text-xs">
+                        <div class="flex items-center gap-2">
+                            <span class="font-semibold text-white">Code nạp ESP32 (Tự động nhận mọi chân GPIO):</span>
+                            <select id="guide-device-select" onchange="updateGuideCode()" class="bg-gray-800 border border-gray-700 text-sky-400 font-mono rounded px-2 py-1"></select>
+                        </div>
+                        <button onclick="copyGuideCode()" class="bg-[#0f8a8d] hover:bg-[#0c7275] text-white px-3 py-1.5 rounded font-medium">
+                            Copy toàn bộ Code
+                        </button>
+                    </div>
+                    <pre id="guide-code-block" class="bg-[#0d1117] text-emerald-300 p-4 text-xs font-mono overflow-x-auto leading-relaxed"></pre>
+                </div>
+            </div>
+
+            <!-- TAB 8: QUẢN TRỊ ADMIN (THEO DÕI NGƯỜI DÙNG & DỰ ÁN) -->
+            <div id="tab-admin" class="tab-content hidden space-y-6">
+                <div class="flex items-center justify-between border-b pb-4">
+                    <div>
+                        <h2 class="text-xl font-bold text-gray-900">Bảng điều khiển Quản trị viên (Admin)</h2>
+                        <p class="text-xs text-gray-500 mt-1">Theo dõi toàn bộ tài khoản người dùng đã đăng ký, danh sách dự án và thiết bị ESP32 trên hệ thống</p>
+                    </div>
+                    <button onclick="loadAdminData()" class="px-3 py-1.5 border rounded-lg text-xs font-medium hover:bg-gray-50">↻ Làm mới dữ liệu</button>
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div class="bg-sky-50 border border-sky-100 rounded-xl p-5">
+                        <p class="text-xs text-gray-600">Tổng tài khoản đăng ký</p>
+                        <p id="admin-stat-users" class="text-3xl font-bold text-sky-800 mt-1">0</p>
+                    </div>
+                    <div class="bg-indigo-50 border border-indigo-100 rounded-xl p-5">
+                        <p class="text-xs text-gray-600">Tổng dự án toàn hệ thống</p>
+                        <p id="admin-stat-projects" class="text-3xl font-bold text-indigo-800 mt-1">0</p>
+                    </div>
+                    <div class="bg-emerald-50 border border-emerald-100 rounded-xl p-5">
+                        <p class="text-xs text-gray-600">Tổng mạch ESP32 đã tạo</p>
+                        <p id="admin-stat-devices" class="text-3xl font-bold text-emerald-800 mt-1">0</p>
+                    </div>
+                </div>
+
+                <div id="admin-users-list" class="space-y-4"></div>
+            </div>
+
+        </main>
+    </div>
+
+    <!-- MODAL 1: TẠO DỰ ÁN -->
+    <div id="project-modal" class="hidden fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-2xl max-w-md w-full p-6 space-y-4">
+            <h3 class="text-lg font-bold">Tạo dự án IoT mới</h3>
+            <input type="text" id="new-project-name" placeholder="Tên dự án (VD: Nhà thông minh)" class="w-full border rounded-lg px-3 py-2 text-sm">
+            <input type="text" id="new-project-desc" placeholder="Mô tả ngắn" class="w-full border rounded-lg px-3 py-2 text-sm">
+            <div class="flex justify-end gap-2">
+                <button onclick="closeModal('project-modal')" class="px-4 py-2 text-xs text-gray-600">Hủy</button>
+                <button onclick="createProject()" class="px-4 py-2 text-xs bg-[#0f8a8d] text-white rounded-lg">Lưu dự án</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL 2: THÊM ESP32 -->
+    <div id="device-modal" class="hidden fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-2xl max-w-md w-full p-6 space-y-4">
+            <h3 class="text-lg font-bold">Thêm mạch ESP32</h3>
+            <select id="device-project-select" class="w-full border rounded-lg px-3 py-2 text-sm bg-white"></select>
+            <input type="text" id="new-device-name" placeholder="Tên thiết bị (VD: ESP32_PhongKhach)" class="w-full border rounded-lg px-3 py-2 text-sm">
+            <div class="flex justify-end gap-2">
+                <button onclick="closeModal('device-modal')" class="px-4 py-2 text-xs text-gray-600">Hủy</button>
+                <button onclick="createDevice()" class="px-4 py-2 text-xs bg-[#0f8a8d] text-white rounded-lg">Tạo & Lấy Token</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL 3: CẤU HÌNH CHÂN GPIO -->
+    <div id="pin-modal" class="hidden fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-2xl max-w-md w-full p-6 space-y-4 shadow-xl">
+            <h3 id="pin-modal-title" class="text-lg font-bold text-gray-900">Cấu hình chân GPIO</h3>
+            <input type="hidden" id="pin-category">
+            <div>
+                <label class="block text-xs font-medium text-gray-600 mb-1">Chân GPIO này dùng để làm gì? (Tên hiển thị)</label>
+                <input type="text" id="pin-name" placeholder="VD: Bật tắt đèn, Quạt, Cảm biến độ ẩm đất..." class="w-full border rounded-lg px-3 py-2 text-sm">
+            </div>
+            <div>
+                <label class="block text-xs font-medium text-gray-600 mb-1">Số chân GPIO trên mạch ESP32</label>
+                <input type="number" id="pin-gpio" placeholder="VD: 2, 4, 13, 26, 27, 34..." class="w-full border rounded-lg px-3 py-2 text-sm font-mono">
+            </div>
+            <div id="pin-control-fields" class="space-y-3">
+                <div>
+                    <label class="block text-xs font-medium text-gray-600 mb-1">Kiểu điều khiển</label>
+                    <select id="pin-control-type" onchange="document.getElementById('pin-pwm-range').classList.toggle('hidden', this.value !== 'slider')" class="w-full border rounded-lg px-3 py-2 text-sm bg-white">
+                        <option value="switch">Công tắc gạt Bật / Tắt (Digital HIGH/LOW)</option>
+                        <option value="button">Nút nhấn nhả (Kích xung 1 giây)</option>
+                        <option value="slider">Thanh trượt điều chỉnh mức (PWM 0 - 255)</option>
+                    </select>
+                </div>
+                <div id="pin-pwm-range" class="hidden grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-xs text-gray-600 mb-1">Min</label>
+                        <input type="number" id="pin-min" value="0" class="w-full border rounded-lg px-3 py-2 text-sm">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-gray-600 mb-1">Max</label>
+                        <input type="number" id="pin-max" value="255" class="w-full border rounded-lg px-3 py-2 text-sm">
+                    </div>
+                </div>
+            </div>
+            <div id="pin-sensor-fields" class="hidden space-y-3">
+                <div>
+                    <label class="block text-xs font-medium text-gray-600 mb-1">Loại tín hiệu cảm biến đọc về</label>
+                    <select id="pin-sensor-type" class="w-full border rounded-lg px-3 py-2 text-sm bg-white">
+                        <option value="analog">Đọc giá trị Analog (ADC 0 - 4095)</option>
+                        <option value="digital_in">Đọc trạng thái Digital (0 / 1 - Cảm biến vật cản/mưa)</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-600 mb-1">Đơn vị hiển thị (tùy chọn)</label>
+                    <input type="text" id="pin-unit" placeholder="VD: %, °C, đơn vị..." class="w-full border rounded-lg px-3 py-2 text-sm">
+                </div>
+            </div>
+            <div class="flex justify-end gap-2 pt-2">
+                <button onclick="closeModal('pin-modal')" class="px-4 py-2 text-xs text-gray-600">Hủy</button>
+                <button onclick="savePinConfig()" class="px-4 py-2 text-xs font-semibold bg-[#0f8a8d] text-white rounded-lg">Lưu cấu hình chân</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        lucide.createIcons();
+        let isRegisterMode = false;
+        let selectedLoginRole = 'user';
+        let authToken = localStorage.getItem('iot_token') || '';
+        let currentUser = localStorage.getItem('iot_user') || '';
+        let currentRole = localStorage.getItem('iot_role') || 'user';
+        let projects = [];
+        let selectedControlDeviceId = null;
+        let selectedSensorDeviceId = null;
+        let mqttClient = null;
+        let onlineMap = {};
+        let autoSensorTimer = null;
+
+        // ================= CHỌN CỔNG ĐĂNG NHẬP (USER / ADMIN) =================
+        function selectLoginRole(role) {
+            selectedLoginRole = role;
+            isRegisterMode = false;
+            const btnUser = document.getElementById('btn-role-user');
+            const btnAdmin = document.getElementById('btn-role-admin');
+            const submitBtn = document.getElementById('auth-submit-btn');
+
+            if (role === 'admin') {
+                btnAdmin.className = 'py-2 rounded-full bg-rose-600 text-white shadow-sm transition';
+                btnUser.className = 'py-2 rounded-full text-gray-500 hover:text-gray-800 transition';
+                document.getElementById('auth-title').innerText = 'Đăng nhập Quản trị Admin';
+                document.getElementById('auth-subtitle').innerText = 'Theo dõi người dùng, dự án và quản lý toàn bộ hệ thống';
+                submitBtn.innerText = 'Đăng nhập quyền Admin';
+                submitBtn.className = 'w-full bg-rose-600 hover:bg-rose-700 text-white font-medium py-3 rounded-full text-sm transition';
+                document.getElementById('auth-switch-wrapper').classList.add('hidden');
+            } else {
+                btnUser.className = 'py-2 rounded-full bg-white text-[#0f8a8d] shadow-sm transition';
+                btnAdmin.className = 'py-2 rounded-full text-gray-500 hover:text-gray-800 transition';
+                document.getElementById('auth-title').innerText = 'Đăng nhập Người dùng';
+                document.getElementById('auth-subtitle').innerText = 'Quản lý dự án và điều khiển mạch ESP32 của bạn';
+                submitBtn.innerText = 'Đăng nhập';
+                submitBtn.className = 'w-full bg-[#0f8a8d] hover:bg-[#0c7275] text-white font-medium py-3 rounded-full text-sm transition';
+                document.getElementById('auth-switch-wrapper').classList.remove('hidden');
+            }
+        }
+
+        function switchAuthMode() {
+            isRegisterMode = !isRegisterMode;
+            document.getElementById('auth-title').innerText = isRegisterMode ? 'Đăng ký Tài khoản mới' : 'Đăng nhập Người dùng';
+            document.getElementById('auth-submit-btn').innerText = isRegisterMode ? 'Tạo tài khoản' : 'Đăng nhập';
+            document.getElementById('auth-switch-text').innerText = isRegisterMode ? 'Đã có tài khoản?' : 'Chưa có tài khoản?';
+            document.getElementById('auth-switch-btn').innerText = isRegisterMode ? 'Đăng nhập' : 'Đăng ký ngay';
+        }
+
+        document.getElementById('auth-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const username = document.getElementById('auth-username').value.trim();
+            const password = document.getElementById('auth-password').value.trim();
+            const res = await fetch(isRegisterMode ? '/api/register' : '/api/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username, password, loginAs: selectedLoginRole })
+            });
+            const data = await res.json();
+            if (!res.ok) return alert(data.error);
+            if (isRegisterMode) { alert(data.message || 'Đăng ký thành công!'); switchAuthMode(); }
+            else enterApp(data.username, data.token, data.role);
+        });
+
+        async function enterApp(username, token, role) {
+            authToken = token; currentUser = username; currentRole = role || 'user';
+            localStorage.setItem('iot_token', token);
+            localStorage.setItem('iot_user', username);
+            localStorage.setItem('iot_role', currentRole);
+
+            document.getElementById('display-username').innerText = username;
+            const roleBadge = document.getElementById('display-role-badge');
+            roleBadge.innerText = currentRole.toUpperCase();
+            if (currentRole === 'admin') {
+                roleBadge.className = 'ml-1 px-1.5 py-0.5 rounded text-[10px] bg-rose-500/20 text-rose-300 font-bold';
+                document.getElementById('menu-admin-tab').classList.remove('hidden');
+            } else {
+                roleBadge.className = 'ml-1 px-1.5 py-0.5 rounded text-[10px] bg-sky-500/20 text-sky-300';
+                document.getElementById('menu-admin-tab').classList.add('hidden');
+            }
+
+            document.getElementById('auth-screen').classList.add('hidden');
+            document.getElementById('app-screen').classList.remove('hidden');
+            initMQTT();
+            await loadProjects();
+            if (currentRole === 'admin' && selectedLoginRole === 'admin') {
+                switchTab('admin', document.getElementById('menu-admin-tab'));
+            }
+        }
+
+        function logout() { localStorage.clear(); location.reload(); }
+
+        function switchTab(tabId, btn) {
+            document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+            document.getElementById('tab-' + tabId).classList.remove('hidden');
+            document.querySelectorAll('.sidebar-item').forEach(el => el.classList.remove('active'));
+            if (btn) btn.classList.add('active');
+
+            if (tabId === 'control') { selectedControlDeviceId = null; renderControlTab(); }
+            if (tabId === 'sensors') { selectedSensorDeviceId = null; renderSensorTab(); }
+            if (tabId === 'guide') { renderGuideTab(); }
+            if (tabId === 'admin') { loadAdminData(); }
+            if (tabId === 'overview' || tabId === 'devices' || tabId === 'projects') { renderAll(); }
+        }
+
+        // ================= KẾT NỐI MQTT =================
+        function initMQTT() {
+            if (mqttClient) return;
+            mqttClient = mqtt.connect('wss://broker.hivemq.com:8884/mqtt');
+            mqttClient.on('connect', () => {
+                const badge = document.getElementById('mqtt-badge');
+                badge.innerText = 'ĐANG HOẠT ĐỘNG';
+                badge.className = 'text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400';
+                addLog('🌐 Web đã kết nối thành công tới MQTT Cloud!');
+                subscribeAllDevices();
+            });
+
+            mqttClient.on('message', (topic, message) => {
+                const val = message.toString();
+                const parts = topic.split('/');
+                if (parts[0] !== 'iot') return;
+                const token = parts[1];
+
+                if (parts[2] === 'status') {
+                    onlineMap[token] = (val === 'online');
+                    updateOnlineStats();
+                    addLog(`📡 Thiết bị [${token}] chuyển trạng thái: ${val.toUpperCase()}`);
+                }
+
+                if (parts[2] === 'sensor') {
+                    const gpio = parts[3];
+                    const el = document.getElementById(`sensor-read-${token}-${gpio}`);
+                    if (el) el.innerText = val;
+                    addLog(`📥 [${token}] Cảm biến GPIO ${gpio} = ${val}`);
+                }
+            });
+
+            if (!autoSensorTimer) {
+                autoSensorTimer = setInterval(() => {
+                    if (selectedSensorDeviceId) {
+                        const dev = getAllDevices().find(d => d.id === selectedSensorDeviceId);
+                        if (dev) requestSensorRefresh(dev.device_token);
+                    }
+                }, 3000);
+            }
+        }
+
+        function subscribeAllDevices() {
+            if (!mqttClient || !mqttClient.connected) return;
+            getAllDevices().forEach(d => {
+                mqttClient.subscribe(`iot/${d.device_token}/sensor/#`);
+                mqttClient.subscribe(`iot/${d.device_token}/status`);
+            });
+        }
+
+        function updateOnlineStats() {
+            const allDevs = getAllDevices();
+            const onlineCount = allDevs.filter(d => onlineMap[d.device_token]).length;
+            document.getElementById('stat-online-devices').innerText = String(onlineCount).padStart(2, '0');
+        }
+
+        function sendGPIOCommand(deviceToken, mode, gpio, value) {
+            if (!mqttClient || !mqttClient.connected) return alert('Đang kết nối MQTT, thử lại sau 2 giây!');
+            const topic = `iot/${deviceToken}/cmd/${mode}/${gpio}`;
+            mqttClient.publish(topic, String(value));
+            addLog(`📤 [${deviceToken}] Lệnh ${mode.toUpperCase()} chân GPIO ${gpio} => ${value}`);
+        }
+
+        function triggerPulse(deviceToken, gpio) {
+            sendGPIOCommand(deviceToken, 'digital', gpio, 1);
+            setTimeout(() => sendGPIOCommand(deviceToken, 'digital', gpio, 0), 1000);
+        }
+
+        // ================= DỮ LIỆU & HIỂN THỊ =================
+        function getAllDevices() {
+            return projects.flatMap(p => (p.devices || []).map(d => ({ ...d, projectName: p.name })));
+        }
+
+        async function loadProjects() {
+            const res = await fetch('/api/projects', { headers: { 'Authorization': 'Bearer ' + authToken } });
+            if (!res.ok) return logout();
+            projects = await res.json();
+            subscribeAllDevices();
+            renderAll();
+        }
+
+        function renderAll() {
+            const allDevs = getAllDevices();
+            document.getElementById('stat-total-projects').innerText = String(projects.length).padStart(2, '0');
+            updateOnlineStats();
+
+            // Tổng quan
+            document.getElementById('overview-project-list').innerHTML = projects.length === 0
+                ? `<div class="border-2 border-dashed rounded-xl p-8 text-center text-sm text-gray-500">Chưa có dự án nào. Bấm "+ Tạo dự án mới" để bắt đầu.</div>`
+                : projects.map(p => `
+                    <div class="border rounded-xl p-5 bg-white flex items-center justify-between">
+                        <div>
+                            <h4 class="font-bold text-gray-900">${p.name}</h4>
+                            <p class="text-xs text-gray-500 mt-1">${p.devices.length} mạch ESP32 · ${p.description || 'Không có mô tả'}</p>
+                        </div>
+                        <button onclick="switchTab('control', document.querySelectorAll('.sidebar-item')[3])" class="text-xs font-semibold text-[#0f8a8d] hover:underline">Đi tới điều khiển →</button>
+                    </div>`).join('');
+
+            // Quản lý dự án (Có nút Xóa dự án)
+            document.getElementById('projects-grid').innerHTML = projects.length === 0
+                ? `<div class="col-span-2 border-2 border-dashed rounded-xl p-8 text-center text-xs text-gray-400">Chưa có dự án nào.</div>`
+                : projects.map(p => `
+                    <div class="border rounded-xl p-5 flex items-start justify-between bg-white hover:border-gray-300">
+                        <div>
+                            <h4 class="font-bold text-gray-900">${p.name}</h4>
+                            <p class="text-xs text-gray-500 mt-1">${p.description || 'Không có mô tả'}</p>
+                            <p class="text-xs text-[#0f8a8d] font-medium mt-3">Số mạch ESP32: ${p.devices.length}</p>
+                        </div>
+                        <button onclick="deleteProject(${p.id}, '${p.name}')" class="px-2.5 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-600 text-xs font-semibold transition">
+                            Xóa dự án
+                        </button>
+                    </div>`).join('');
+
+            // Quản lý thiết bị (Có nút Xóa thiết bị)
+            document.getElementById('devices-table-container').innerHTML = allDevs.length === 0
+                ? `<div class="p-8 text-center text-xs text-gray-400">Chưa có mạch ESP32 nào. Hãy bấm "+ Thêm ESP32 mới".</div>`
+                : `<table class="w-full text-left text-xs">
+                    <thead class="bg-gray-50 border-b"><tr><th class="p-3">Tên ESP32</th><th class="p-3">Thuộc dự án</th><th class="p-3">Device Token</th><th class="p-3">Trạng thái</th><th class="p-3">Chân GPIO</th><th class="p-3 text-right">Thao tác</th></tr></thead>
+                    <tbody class="divide-y">${allDevs.map(d => {
+                        const isOn = onlineMap[d.device_token];
+                        return `
+                        <tr>
+                            <td class="p-3 font-bold text-gray-800">${d.name}</td>
+                            <td class="p-3 text-gray-500">${d.projectName}</td>
+                            <td class="p-3 font-mono text-[#0f8a8d] font-bold">${d.device_token}</td>
+                            <td class="p-3">
+                                <span class="px-2 py-0.5 rounded-full font-medium ${isOn ? 'bg-emerald-50 text-emerald-700' : 'bg-gray-100 text-gray-500'}">
+                                    ${isOn ? '● Online' : '○ Offline'}
+                                </span>
+                            </td>
+                            <td class="p-3 text-gray-600">${d.pins.length} chân</td>
+                            <td class="p-3 text-right">
+                                <button onclick="deleteDevice(${d.id}, '${d.name}')" class="text-rose-500 hover:underline font-medium">Xóa</button>
+                            </td>
+                        </tr>`;
+                    }).join('')}
+                    </tbody>
+                   </table>`;
+
+            renderControlTab();
+            renderSensorTab();
+            renderGuideTab();
+        }
+
+        // ================= QUẢN TRỊ ADMIN =================
+        async function loadAdminData() {
+            const res = await fetch('/api/admin/overview', { headers: { 'Authorization': 'Bearer ' + authToken } });
+            if (!res.ok) return;
+            const data = await res.json();
+
+            document.getElementById('admin-stat-users').innerText = data.totalUsers;
+            document.getElementById('admin-stat-projects').innerText = data.totalProjects;
+            document.getElementById('admin-stat-devices').innerText = data.totalDevices;
+
+            document.getElementById('admin-users-list').innerHTML = data.users.map(u => `
+                <div class="border border-gray-200 rounded-xl p-5 bg-white space-y-3">
+                    <div class="flex flex-wrap items-center justify-between gap-2 border-b pb-3">
+                        <div class="flex items-center gap-2.5">
+                            <span class="font-bold text-sm text-gray-900">${u.username}</span>
+                            <span class="px-2 py-0.5 rounded text-[10px] font-bold ${u.role === 'admin' ? 'bg-rose-100 text-rose-700' : 'bg-sky-100 text-sky-700'}">${(u.role || 'user').toUpperCase()}</span>
+                            <span class="text-xs text-gray-400">· ${u.projects.length} dự án</span>
+                        </div>
+                        ${u.role !== 'admin' ? `<button onclick="adminDeleteUser(${u.id}, '${u.username}')" class="text-xs text-rose-600 hover:underline font-medium">Xóa tài khoản</button>` : ''}
+                    </div>
+                    ${u.projects.length === 0
+                        ? `<p class="text-xs text-gray-400 italic">Người dùng này chưa tạo dự án nào.</p>`
+                        : `<div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            ${u.projects.map(p => `
+                                <div class="bg-gray-50 rounded-lg p-3 text-xs border border-gray-100">
+                                    <p class="font-bold text-gray-800">📁 ${p.name}</p>
+                                    <p class="text-gray-500 mt-0.5">${p.description || 'Không có mô tả'}</p>
+                                    <div class="mt-2 flex flex-wrap gap-1.5">
+                                        ${p.devices.length === 0 
+                                            ? '<span class="text-gray-400">0 mạch ESP32</span>' 
+                                            : p.devices.map(d => `<span class="px-2 py-0.5 bg-white border rounded font-mono text-[11px] text-[#0f8a8d]">${d.name} (${d.device_token})</span>`).join('')}
+                                    </div>
+                                </div>
+                            `).join('')}
+                           </div>`
+                    }
+                </div>
+            `).join('');
+        }
+
+        async function adminDeleteUser(userId, username) {
+            if (!confirm(`Xóa vĩnh viễn tài khoản "${username}" và toàn bộ dự án của họ?`)) return;
+            await fetch(`/api/admin/users/${userId}`, { method: 'DELETE', headers: { 'Authorization': 'Bearer ' + authToken } });
+            loadAdminData();
+        }
+
+        // ================= ĐIỀU KHIỂN & CẢM BIẾN =================
+        function renderControlTab() {
+            const container = document.getElementById('control-view-container');
+            const allDevs = getAllDevices();
+
+            if (!selectedControlDeviceId) {
+                container.innerHTML = `
+                    <div class="flex items-center justify-between border-b pb-4">
+                        <div>
+                            <h2 class="text-xl font-bold text-gray-900">Điều khiển thiết bị</h2>
+                            <p class="text-xs text-gray-500 mt-1">Chọn mạch ESP32 bên dưới để cấu hình chân GPIO và điều khiển</p>
+                        </div>
+                        <button onclick="openNewDeviceModal()" class="bg-[#0f8a8d] text-white text-xs font-medium px-4 py-2 rounded-lg">+ Thêm ESP32 mới</button>
+                    </div>
+                    ${allDevs.length === 0 
+                        ? `<div class="border-2 border-dashed rounded-xl p-10 text-center text-sm text-gray-400 mt-4">Chưa có mạch ESP32 nào được cài vào. Hãy tạo dự án và thêm ESP32 trước.</div>`
+                        : `<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mt-4">
+                            ${allDevs.map(d => {
+                                const ctrlCount = d.pins.filter(p => p.category === 'control').length;
+                                const isOn = onlineMap[d.device_token];
+                                return `
+                                <div onclick="selectedControlDeviceId = ${d.id}; renderControlTab()" class="cursor-pointer border border-gray-200 hover:border-[#0f8a8d] hover:shadow-sm rounded-xl p-5 transition bg-white">
+                                    <div class="flex items-center justify-between">
+                                        <span class="px-2.5 py-1 rounded-md text-xs font-bold ${isOn ? 'bg-emerald-50 text-emerald-700' : 'bg-gray-100 text-gray-600'}">${isOn ? '● ONLINE' : '○ OFFLINE'}</span>
+                                        <span class="text-xs text-gray-400">${d.projectName}</span>
+                                    </div>
+                                    <h3 class="text-base font-bold text-gray-900 mt-3">${d.name}</h3>
+                                    <p class="text-xs font-mono text-gray-400 mt-1">${d.device_token}</p>
+                                    <div class="mt-4 pt-3 border-t flex items-center justify-between text-xs">
+                                        <span class="text-gray-600">Đã cấu hình: <strong>${ctrlCount} chân điều khiển</strong></span>
+                                        <span class="text-[#0f8a8d] font-semibold">Mở điều khiển →</span>
+                                    </div>
+                                </div>`;
+                            }).join('')}
+                           </div>`
+                    }`;
+                return;
+            }
+
+            const device = allDevs.find(d => d.id === selectedControlDeviceId);
+            if (!device) { selectedControlDeviceId = null; return renderControlTab(); }
+            const controlPins = device.pins.filter(p => p.category === 'control');
+
+            container.innerHTML = `
+                <div class="flex flex-wrap items-center justify-between border-b pb-4 gap-3">
+                    <div class="flex items-center gap-3">
+                        <button onclick="selectedControlDeviceId = null; renderControlTab()" class="px-3 py-1.5 rounded-lg border text-xs font-medium hover:bg-gray-50">← Quay lại danh sách ESP32</button>
+                        <div>
+                            <h2 class="text-lg font-bold text-gray-900">${device.name}</h2>
+                            <p class="text-xs font-mono text-[#0f8a8d]">${device.device_token}</p>
+                        </div>
+                    </div>
+                    <button onclick="openPinModal('control')" class="bg-[#f58220] hover:bg-[#e07010] text-white text-xs font-semibold px-4 py-2 rounded-lg shadow-sm">
+                        + Cấu hình chân GPIO điều khiển
+                    </button>
+                </div>
+
+                ${controlPins.length === 0
+                    ? `<div class="border-2 border-dashed border-gray-200 rounded-xl p-12 text-center space-y-2 mt-4">
+                        <p class="text-sm font-semibold text-gray-700">Mạch ${device.name} chưa có chân GPIO điều khiển nào!</p>
+                        <p class="text-xs text-gray-400">Bấm nút màu cam <strong>"+ Cấu hình chân GPIO điều khiển"</strong> ở góc trên để chọn chân GPIO và chức năng bạn muốn.</p>
+                       </div>`
+                    : `<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mt-4">
+                        ${controlPins.map(p => {
+                            const delBtn = `<button onclick="deletePin(${p.id})" title="Xóa chân này" class="text-gray-300 hover:text-rose-500 text-xs">✕</button>`;
+                            if (p.type === 'switch') {
+                                return `
+                                <div class="border border-gray-200 rounded-xl p-5 flex items-center justify-between">
+                                    <div>
+                                        <div class="flex items-center gap-2"><p class="text-sm font-bold text-gray-800">${p.name}</p>${delBtn}</div>
+                                        <p class="text-xs font-mono text-[#0f8a8d] mt-1">GPIO ${p.gpio} · Bật/Tắt</p>
+                                    </div>
+                                    <label class="relative inline-flex items-center cursor-pointer">
+                                        <input type="checkbox" onchange="sendGPIOCommand('${device.device_token}', 'digital', ${p.gpio}, this.checked ? 1 : 0)" class="sr-only peer">
+                                        <div class="w-11 h-6 bg-gray-200 rounded-full peer peer-checked:bg-[#0f8a8d] after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
+                                    </label>
+                                </div>`;
+                            }
+                            if (p.type === 'button') {
+                                return `
+                                <div class="border border-gray-200 rounded-xl p-5 flex items-center justify-between">
+                                    <div>
+                                        <div class="flex items-center gap-2"><p class="text-sm font-bold text-gray-800">${p.name}</p>${delBtn}</div>
+                                        <p class="text-xs font-mono text-[#0f8a8d] mt-1">GPIO ${p.gpio} · Kích xung 1s</p>
+                                    </div>
+                                    <button onclick="triggerPulse('${device.device_token}', ${p.gpio})" class="bg-[#0f8a8d] active:scale-95 text-white text-xs font-semibold px-4 py-2 rounded-lg">Nhấn</button>
+                                </div>`;
+                            }
+                            if (p.type === 'slider') {
+                                return `
+                                <div class="border border-gray-200 rounded-xl p-5">
+                                    <div class="flex justify-between items-center mb-2">
+                                        <div class="flex items-center gap-2"><p class="text-sm font-bold text-gray-800">${p.name}</p>${delBtn}</div>
+                                        <span id="sl-val-${p.id}" class="text-xs font-bold text-[#0f8a8d]">${p.min_val}</span>
+                                    </div>
+                                    <input type="range" min="${p.min_val}" max="${p.max_val}" value="${p.min_val}"
+                                        oninput="document.getElementById('sl-val-${p.id}').innerText = this.value"
+                                        onchange="sendGPIOCommand('${device.device_token}', 'pwm', ${p.gpio}, this.value)" class="w-full accent-[#0f8a8d]">
+                                    <p class="text-[11px] font-mono text-gray-400 mt-1">GPIO ${p.gpio} · PWM (${p.min_val} - ${p.max_val})</p>
+                                </div>`;
+                            }
+                        }).join('')}
+                       </div>`
+                }`;
+        }
+
+        function renderSensorTab() {
+            const container = document.getElementById('sensor-view-container');
+            const allDevs = getAllDevices();
+
+            if (!selectedSensorDeviceId) {
+                container.innerHTML = `
+                    <div class="border-b pb-4">
+                        <h2 class="text-xl font-bold text-gray-900">Giám sát cảm biến</h2>
+                        <p class="text-xs text-gray-500 mt-1">Chọn mạch ESP32 bên dưới để xem thông số cảm biến đã đặt ở các chân GPIO</p>
+                    </div>
+                    ${allDevs.length === 0 
+                        ? `<div class="border-2 border-dashed rounded-xl p-10 text-center text-sm text-gray-400 mt-4">Chưa có mạch ESP32 nào được cài vào.</div>`
+                        : `<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mt-4">
+                            ${allDevs.map(d => {
+                                const sensorCount = d.pins.filter(p => p.category === 'sensor').length;
+                                const isOn = onlineMap[d.device_token];
+                                return `
+                                <div onclick="selectedSensorDeviceId = ${d.id}; renderSensorTab()" class="cursor-pointer border border-gray-200 hover:border-[#0f8a8d] hover:shadow-sm rounded-xl p-5 transition bg-white">
+                                    <div class="flex items-center justify-between">
+                                        <span class="px-2.5 py-1 rounded-md text-xs font-bold ${isOn ? 'bg-emerald-50 text-emerald-700' : 'bg-gray-100 text-gray-600'}">${isOn ? '● ONLINE' : '○ OFFLINE'}</span>
+                                        <span class="text-xs text-gray-400">${d.projectName}</span>
+                                    </div>
+                                    <h3 class="text-base font-bold text-gray-900 mt-3">${d.name}</h3>
+                                    <p class="text-xs font-mono text-gray-400 mt-1">${d.device_token}</p>
+                                    <div class="mt-4 pt-3 border-t flex items-center justify-between text-xs">
+                                        <span class="text-gray-600">${sensorCount > 0 ? `Đang theo dõi <strong>${sensorCount} cảm biến</strong>` : '<span class="text-amber-600">Chưa đặt cảm biến</span>'}</span>
+                                        <span class="text-[#0f8a8d] font-semibold">Xem chi tiết →</span>
+                                    </div>
+                                </div>`;
+                            }).join('')}
+                           </div>`
+                    }`;
+                return;
+            }
+
+            const device = allDevs.find(d => d.id === selectedSensorDeviceId);
+            if (!device) { selectedSensorDeviceId = null; return renderSensorTab(); }
+            const sensorPins = device.pins.filter(p => p.category === 'sensor');
+
+            container.innerHTML = `
+                <div class="flex flex-wrap items-center justify-between border-b pb-4 gap-3">
+                    <div class="flex items-center gap-3">
+                        <button onclick="selectedSensorDeviceId = null; renderSensorTab()" class="px-3 py-1.5 rounded-lg border text-xs font-medium hover:bg-gray-50">← Quay lại danh sách ESP32</button>
+                        <div>
+                            <h2 class="text-lg font-bold text-gray-900">Cảm biến trên: ${device.name}</h2>
+                            <p class="text-xs font-mono text-[#0f8a8d]">${device.device_token} · Tự động cập nhật mỗi 3 giây</p>
+                        </div>
+                    </div>
+                    <button onclick="openPinModal('sensor')" class="bg-[#0f8a8d] hover:bg-[#0c7275] text-white text-xs font-semibold px-4 py-2 rounded-lg">
+                        + Đặt chân GPIO cảm biến
+                    </button>
+                </div>
+
+                ${sensorPins.length === 0
+                    ? `<div class="border-2 border-dashed border-gray-200 rounded-xl p-12 text-center space-y-2 mt-4">
+                        <p class="text-base font-bold text-gray-700">Chưa đặt cảm biến cho ESP này</p>
+                        <p class="text-xs text-gray-400">Mạch <strong>${device.name}</strong> hiện chưa có chân GPIO nào được khai báo đọc cảm biến. Bấm nút <strong>"+ Đặt chân GPIO cảm biến"</strong> để thêm.</p>
+                       </div>`
+                    : `<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-4">
+                        ${sensorPins.map(p => `
+                            <div class="border border-gray-200 rounded-xl p-5 bg-gray-50/40">
+                                <div class="flex justify-between items-center">
+                                    <span class="text-xs font-semibold text-gray-600">${p.name}</span>
+                                    <button onclick="deletePin(${p.id})" title="Xóa cảm biến này" class="text-gray-300 hover:text-rose-500 text-xs">✕</button>
+                                </div>
+                                <div class="mt-3 flex items-baseline gap-1.5">
+                                    <span id="sensor-read-${device.device_token}-${p.gpio}" class="text-3xl font-bold text-gray-900">--</span>
+                                    <span class="text-sm font-medium text-gray-500">${p.unit || ''}</span>
+                                </div>
+                                <p class="text-[11px] font-mono text-[#0f8a8d] mt-3 pt-2 border-t">Chân GPIO ${p.gpio} (${p.type === 'analog' ? 'Analog ADC' : 'Digital IN'})</p>
+                            </div>
+                        `).join('')}
+                       </div>`
+                }`;
+            if (sensorPins.length > 0) requestSensorRefresh(device.device_token);
+        }
+
+        function requestSensorRefresh(deviceToken) {
+            if (!mqttClient || !mqttClient.connected) return;
+            const dev = getAllDevices().find(d => d.device_token === deviceToken);
+            if (!dev) return;
+            dev.pins.filter(p => p.category === 'sensor').forEach(sp => {
+                mqttClient.publish(`iot/${deviceToken}/req_sensor/${sp.type}/${sp.gpio}`, '1');
+            });
+        }
+
+        function renderGuideTab() {
+            const select = document.getElementById('guide-device-select');
+            const allDevs = getAllDevices();
+            select.innerHTML = allDevs.length === 0
+                ? `<option value="DAN_TOKEN_CUA_BAN_VAO_DAY">Chưa có ESP32 (Tạo thiết bị để lấy Token tự động)</option>`
+                : allDevs.map(d => `<option value="${d.device_token}">${d.name} (${d.device_token})</option>`).join('');
+            updateGuideCode();
+        }
+
+        function updateGuideCode() {
+            const token = document.getElementById('guide-device-select').value || 'DAN_TOKEN_CUA_BAN_VAO_DAY';
+            document.getElementById('guide-code-block').innerText = `#include <WiFi.h>
+#include <PubSubClient.h>
+
+// 1. ĐIỀN TÊN WIFI & MẬT KHẨU CỦA BẠN (Lưu ý: Wi-Fi 2.4GHz)
+const char* ssid         = "TEN_WIFI_NHA_BAN";
+const char* password     = "MAT_KHAU_WIFI";
+
+// 2. MÃ ĐỊNH DANH THIẾT BỊ (ĐÃ TỰ ĐỘNG ĐIỀN THEO MẠCH BẠN CHỌN)
+const char* device_token = "${token}";
+
+const char* mqtt_server = "broker.hivemq.com";
+WiFiClient espClient;
+PubSubClient client(espClient);
+
+void callback(char* topic, byte* payload, unsigned int length) {
+  String msg = "";
+  for (int i = 0; i < length; i++) msg += (char)payload[i];
+  String topicStr = String(topic);
+
+  int cmdIdx = topicStr.indexOf("/cmd/");
+  if (cmdIdx != -1) {
+    String sub = topicStr.substring(cmdIdx + 5);
+    int slash = sub.indexOf('/');
+    String mode = sub.substring(0, slash);
+    int gpio = sub.substring(slash + 1).toInt();
+    int val = msg.toInt();
+
+    if (mode == "digital") {
+      pinMode(gpio, OUTPUT);
+      digitalWrite(gpio, val == 1 ? HIGH : LOW);
+    } else if (mode == "pwm") {
+      analogWrite(gpio, val);
+    }
+  }
+
+  int reqIdx = topicStr.indexOf("/req_sensor/");
+  if (reqIdx != -1) {
+    String sub = topicStr.substring(reqIdx + 12);
+    int slash = sub.indexOf('/');
+    String sType = sub.substring(0, slash);
+    int gpio = sub.substring(slash + 1).toInt();
+
+    pinMode(gpio, INPUT);
+    int sensorVal = (sType == "analog") ? analogRead(gpio) : digitalRead(gpio);
+    String pubTopic = "iot/" + String(device_token) + "/sensor/" + String(gpio);
+    client.publish(pubTopic.c_str(), String(sensorVal).c_str());
+  }
+}
+
+void reconnect() {
+  while (!client.connected()) {
+    String clientId = "ESP32-" + String(random(0xffff), HEX);
+    String statusTopic = "iot/" + String(device_token) + "/status";
+    if (client.connect(clientId.c_str(), NULL, NULL, statusTopic.c_str(), 1, true, "offline")) {
+      client.publish(statusTopic.c_str(), "online", true);
+      client.subscribe(("iot/" + String(device_token) + "/cmd/#").c_str());
+      client.subscribe(("iot/" + String(device_token) + "/req_sensor/#").c_str());
+      Serial.println("Da ket noi len Web thanh cong!");
+    } else {
+      delay(3000);
+    }
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) delay(500);
+  Serial.println("Da ket noi WiFi!");
+  client.setServer(mqtt_server, 1883);
+  client.setCallback(callback);
+}
+
+void loop() {
+  if (!client.connected()) reconnect();
+  client.loop();
+}`;
+        }
+
+        function copyGuideCode() {
+            navigator.clipboard.writeText(document.getElementById('guide-code-block').innerText);
+            alert('Đã copy toàn bộ code ESP32!');
+        }
+
+        // ================= MODALS & CRUD ACTIONS =================
+        function openModal(id) { document.getElementById(id).classList.remove('hidden'); }
+        function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
+
+        async function createProject() {
+            const name = document.getElementById('new-project-name').value.trim();
+            const description = document.getElementById('new-project-desc').value.trim();
+            if (!name) return;
+            await fetch('/api/projects', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + authToken },
+                body: JSON.stringify({ name, description })
+            });
+            document.getElementById('new-project-name').value = '';
+            document.getElementById('new-project-desc').value = '';
+            closeModal('project-modal');
+            await loadProjects();
+        }
+
+        async function deleteProject(id, name) {
+            if (!confirm(`Bạn chắc chắn muốn xóa dự án "${name}"? Toàn bộ thiết bị ESP32 bên trong dự án này cũng sẽ bị xóa.`)) return;
+            await fetch(`/api/projects/${id}`, {
+                method: 'DELETE',
+                headers: { 'Authorization': 'Bearer ' + authToken }
+            });
+            await loadProjects();
+        }
+
+        function openNewDeviceModal() {
+            if (projects.length === 0) return alert('Hãy tạo ít nhất 1 dự án trước!');
+            document.getElementById('device-project-select').innerHTML = projects.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
+            openModal('device-modal');
+        }
+
+        async function createDevice() {
+            const projectId = document.getElementById('device-project-select').value;
+            const name = document.getElementById('new-device-name').value.trim();
+            if (!name) return;
+            await fetch(`/api/projects/${projectId}/devices`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + authToken },
+                body: JSON.stringify({ name })
+            });
+            document.getElementById('new-device-name').value = '';
+            closeModal('device-modal');
+            await loadProjects();
+        }
+
+        async function deleteDevice(id, name) {
+            if (!confirm(`Xóa mạch thiết bị "${name}"?`)) return;
+            await fetch(`/api/devices/${id}`, {
+                method: 'DELETE',
+                headers: { 'Authorization': 'Bearer ' + authToken }
+            });
+            await loadProjects();
+        }
+
+        function openPinModal(category) {
+            document.getElementById('pin-category').value = category;
+            document.getElementById('pin-modal-title').innerText = category === 'control' ? 'Cấu hình chân GPIO điều khiển' : 'Đặt chân GPIO đọc cảm biến';
+            document.getElementById('pin-control-fields').classList.toggle('hidden', category !== 'control');
+            document.getElementById('pin-sensor-fields').classList.toggle('hidden', category !== 'sensor');
+            openModal('pin-modal');
+        }
+
+        async function savePinConfig() {
+            const category = document.getElementById('pin-category').value;
+            const deviceId = category === 'control' ? selectedControlDeviceId : selectedSensorDeviceId;
+            const name = document.getElementById('pin-name').value.trim();
+            const gpio = document.getElementById('pin-gpio').value.trim();
+            if (!name || !gpio) return alert('Vui lòng nhập tên chức năng và số chân GPIO!');
+
+            const body = {
+                category,
+                name,
+                gpio,
+                type: category === 'control' ? document.getElementById('pin-control-type').value : document.getElementById('pin-sensor-type').value,
+                unit: document.getElementById('pin-unit').value.trim(),
+                min_val: document.getElementById('pin-min').value,
+                max_val: document.getElementById('pin-max').value
+            };
+
+            await fetch(`/api/devices/${deviceId}/pins`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + authToken },
+                body: JSON.stringify(body)
+            });
+
+            document.getElementById('pin-name').value = '';
+            document.getElementById('pin-gpio').value = '';
+            closeModal('pin-modal');
+            await loadProjects();
+        }
+
+        async function deletePin(id) {
+            if (!confirm('Xóa cấu hình chân GPIO này?')) return;
+            await fetch(`/api/pins/${id}`, { method: 'DELETE', headers: { 'Authorization': 'Bearer ' + authToken } });
+            await loadProjects();
+        }
+
+        function addLog(text) {
+            const ul = document.getElementById('activity-log-list');
+            if (ul.children[0]?.innerText.includes('Chưa có')) ul.innerHTML = '';
+            const li = document.createElement('li');
+            li.className = 'p-3 font-mono';
+            li.innerText = `[${new Date().toLocaleTimeString()}] ${text}`;
+            ul.prepend(li);
+        }
+
+        if (authToken && currentUser) enterApp(currentUser, authToken, currentRole);
+    </script>
+</body>
+</html>
