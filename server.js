@@ -32,24 +32,33 @@ function requireAdmin(req, res, next) {
 }
 
 // --- AUTH API ---
-app.post('/api/register', (req, res) => {
-    const { username, password } = req.body;
-    if (!username || !password) return res.status(400).json({ error: "Vui lòng nhập đủ thông tin!" });
-    
-    // Tài khoản đầu tiên tạo trên hệ thống hoặc tên 'admin' sẽ tự động được cấp quyền Admin
-    db.get(`SELECT COUNT(*) as count FROM users`, [], (err, row) => {
-        const role = (row && row.count === 0) || username.toLowerCase() === 'admin' ? 'admin' : 'user';
+app.post('/api/register', async (req, res) => {
+    try {
+        const { username, password } = req.body;
+        if (!username || !password) return res.status(400).json({ error: "Vui lòng nhập đủ thông tin!" });
+
+        const countRes = await db.query(`SELECT COUNT(*)::int AS count FROM users`);
+        const isFirstUser = countRes.rows[0].count === 0;
+        const role = (isFirstUser || username.toLowerCase() === 'admin') ? 'admin' : 'user';
         const hashedPassword = bcrypt.hashSync(password, 8);
-        db.run(`INSERT INTO users (username, password, role) VALUES (?, ?, ?)`, [username, hashedPassword, role], function(err) {
-            if (err) return res.status(400).json({ error: "Tên tài khoản đã tồn tại!" });
-            res.json({ message: `Đăng ký thành công! (Quyền: ${role.toUpperCase()})` });
-        });
-    });
+
+        await db.query(
+            `INSERT INTO users (username, password, role) VALUES ($1, $2, $3)`,
+            [username, hashedPassword, role]
+        );
+        res.json({ message: `Đăng ký thành công! (Quyền: ${role.toUpperCase()})` });
+    } catch (err) {
+        if (err.code === '23505') return res.status(400).json({ error: "Tên tài khoản đã tồn tại!" });
+        res.status(500).json({ error: err.message });
+    }
 });
 
-app.post('/api/login', (req, res) => {
-    const { username, password, loginAs } = req.body;
-    db.get(`SELECT * FROM users WHERE username = ?`, [username], (err, user) => {
+app.post('/api/login', async (req, res) => {
+    try {
+        const { username, password, loginAs } = req.body;
+        const result = await db.query(`SELECT * FROM users WHERE username = $1`, [username]);
+        const user = result.rows[0];
+
         if (!user || !bcrypt.compareSync(password, user.password)) {
             return res.status(401).json({ error: "Sai tài khoản hoặc mật khẩu!" });
         }
@@ -59,129 +68,157 @@ app.post('/api/login', (req, res) => {
         }
         const token = jwt.sign({ id: user.id, username: user.username, role: userRole }, SECRET_KEY, { expiresIn: '7d' });
         res.json({ token, username: user.username, role: userRole });
-    });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-// --- ADMIN API (THEO DÕI NGƯỜI DÙNG & DỰ ÁN TOÀN HỆ THỐNG) ---
-app.get('/api/admin/overview', authenticateToken, requireAdmin, (req, res) => {
-    db.all(`SELECT id, username, role, created_at FROM users ORDER BY id ASC`, [], (err, users) => {
-        db.all(`SELECT * FROM projects`, [], (err, projects) => {
-            db.all(`SELECT * FROM devices`, [], (err, devices) => {
-                const enrichedUsers = (users || []).map(u => {
-                    const userProjects = (projects || []).filter(p => p.user_id === u.id).map(p => ({
-                        ...p,
-                        devices: (devices || []).filter(d => d.project_id === p.id)
-                    }));
-                    return { ...u, projects: userProjects };
-                });
-                res.json({
-                    totalUsers: (users || []).length,
-                    totalProjects: (projects || []).length,
-                    totalDevices: (devices || []).length,
-                    users: enrichedUsers
-                });
-            });
+// --- ADMIN API ---
+app.get('/api/admin/overview', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const usersRes = await db.query(`SELECT id, username, role, created_at FROM users ORDER BY id ASC`);
+        const projectsRes = await db.query(`SELECT * FROM projects ORDER BY id ASC`);
+        const devicesRes = await db.query(`SELECT * FROM devices ORDER BY id ASC`);
+
+        const users = usersRes.rows;
+        const projects = projectsRes.rows;
+        const devices = devicesRes.rows;
+
+        const enrichedUsers = users.map(u => {
+            const userProjects = projects.filter(p => p.user_id === u.id).map(p => ({
+                ...p,
+                devices: devices.filter(d => d.project_id === p.id)
+            }));
+            return { ...u, projects: userProjects };
         });
-    });
+
+        res.json({
+            totalUsers: users.length,
+            totalProjects: projects.length,
+            totalDevices: devices.length,
+            users: enrichedUsers
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-app.delete('/api/admin/users/:id', authenticateToken, requireAdmin, (req, res) => {
-    const targetId = Number(req.params.id);
-    if (targetId === req.user.id) return res.status(400).json({ error: "Không thể tự xóa chính tài khoản Admin đang dùng!" });
-
-    db.all(`SELECT id FROM projects WHERE user_id = ?`, [targetId], (err, projs) => {
-        const projIds = (projs || []).map(p => p.id);
-        if (projIds.length > 0) {
-            const ph = projIds.map(() => '?').join(',');
-            db.run(`DELETE FROM device_pins WHERE device_id IN (SELECT id FROM devices WHERE project_id IN (${ph}))`, projIds);
-            db.run(`DELETE FROM devices WHERE project_id IN (${ph})`, projIds);
-            db.run(`DELETE FROM projects WHERE user_id = ?`, [targetId]);
-        }
-        db.run(`DELETE FROM users WHERE id = ?`, [targetId], () => res.json({ deleted: true }));
-    });
+app.delete('/api/admin/users/:id', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const targetId = Number(req.params.id);
+        if (targetId === req.user.id) return res.status(400).json({ error: "Không thể tự xóa tài khoản Admin đang dùng!" });
+        await db.query(`DELETE FROM users WHERE id = $1`, [targetId]);
+        res.json({ deleted: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 // --- PROJECTS, DEVICES & PINS API ---
-app.get('/api/projects', authenticateToken, (req, res) => {
-    db.all(`SELECT * FROM projects WHERE user_id = ?`, [req.user.id], (err, projects) => {
-        if (!projects || projects.length === 0) return res.json([]);
+app.get('/api/projects', authenticateToken, async (req, res) => {
+    try {
+        const projRes = await db.query(`SELECT * FROM projects WHERE user_id = $1 ORDER BY id ASC`, [req.user.id]);
+        const projects = projRes.rows;
+        if (projects.length === 0) return res.json([]);
+
         const projectIds = projects.map(p => p.id);
-        const pPlaceholders = projectIds.map(() => '?').join(',');
+        const devRes = await db.query(`SELECT * FROM devices WHERE project_id = ANY($1::int[]) ORDER BY id ASC`, [projectIds]);
+        const devices = devRes.rows;
 
-        db.all(`SELECT * FROM devices WHERE project_id IN (${pPlaceholders})`, projectIds, (err, devices) => {
-            if (!devices || devices.length === 0) {
-                return res.json(projects.map(p => ({ ...p, devices: [] })));
-            }
-            const deviceIds = devices.map(d => d.id);
-            const dPlaceholders = deviceIds.map(() => '?').join(',');
+        if (devices.length === 0) {
+            return res.json(projects.map(p => ({ ...p, devices: [] })));
+        }
 
-            db.all(`SELECT * FROM device_pins WHERE device_id IN (${dPlaceholders})`, deviceIds, (err, pins) => {
-                const enrichedDevices = devices.map(d => ({
-                    ...d,
-                    pins: (pins || []).filter(pin => pin.device_id === d.id)
-                }));
-                const result = projects.map(p => ({
-                    ...p,
-                    devices: enrichedDevices.filter(d => d.project_id === p.id)
-                }));
-                res.json(result);
-            });
-        });
-    });
+        const deviceIds = devices.map(d => d.id);
+        const pinRes = await db.query(`SELECT * FROM device_pins WHERE device_id = ANY($1::int[]) ORDER BY id ASC`, [deviceIds]);
+        const pins = pinRes.rows;
+
+        const enrichedDevices = devices.map(d => ({
+            ...d,
+            pins: pins.filter(pin => pin.device_id === d.id)
+        }));
+        const result = projects.map(p => ({
+            ...p,
+            devices: enrichedDevices.filter(d => d.project_id === p.id)
+        }));
+        res.json(result);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-app.post('/api/projects', authenticateToken, (req, res) => {
-    const { name, description } = req.body;
-    db.run(`INSERT INTO projects (user_id, name, description) VALUES (?, ?, ?)`, 
-        [req.user.id, name, description], function(err) {
-        res.json({ id: this.lastID, name, description, devices: [] });
-    });
+app.post('/api/projects', authenticateToken, async (req, res) => {
+    try {
+        const { name, description } = req.body;
+        const result = await db.query(
+            `INSERT INTO projects (user_id, name, description) VALUES ($1, $2, $3) RETURNING id`,
+            [req.user.id, name, description]
+        );
+        res.json({ id: result.rows[0].id, name, description, devices: [] });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-// API XÓA DỰ ÁN (Xóa sạch thiết bị và chân GPIO thuộc dự án đó)
-app.delete('/api/projects/:id', authenticateToken, (req, res) => {
-    const projectId = req.params.id;
-    db.get(`SELECT * FROM projects WHERE id = ? AND user_id = ?`, [projectId, req.user.id], (err, proj) => {
-        if (!proj) return res.status(404).json({ error: "Không tìm thấy dự án!" });
-        db.run(`DELETE FROM device_pins WHERE device_id IN (SELECT id FROM devices WHERE project_id = ?)`, [projectId]);
-        db.run(`DELETE FROM devices WHERE project_id = ?`, [projectId]);
-        db.run(`DELETE FROM projects WHERE id = ?`, [projectId], () => {
-            res.json({ deleted: true });
-        });
-    });
-});
-
-app.post('/api/projects/:projectId/devices', authenticateToken, (req, res) => {
-    const { name } = req.body;
-    const deviceToken = "esp32_" + crypto.randomBytes(6).toString('hex');
-    db.run(`INSERT INTO devices (project_id, name, device_token) VALUES (?, ?, ?)`,
-        [req.params.projectId, name, deviceToken], function(err) {
-        res.json({ id: this.lastID, name, device_token: deviceToken, pins: [] });
-    });
-});
-
-// API XÓA THIẾT BỊ ESP32
-app.delete('/api/devices/:id', authenticateToken, (req, res) => {
-    const deviceId = req.params.id;
-    db.run(`DELETE FROM device_pins WHERE device_id = ?`, [deviceId]);
-    db.run(`DELETE FROM devices WHERE id = ?`, [deviceId], () => {
+app.delete('/api/projects/:id', authenticateToken, async (req, res) => {
+    try {
+        const result = await db.query(`DELETE FROM projects WHERE id = $1 AND user_id = $2`, [req.params.id, req.user.id]);
+        if (result.rowCount === 0) return res.status(404).json({ error: "Không tìm thấy dự án!" });
         res.json({ deleted: true });
-    });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-app.post('/api/devices/:deviceId/pins', authenticateToken, (req, res) => {
-    const { category, name, type, gpio, unit, min_val, max_val } = req.body;
-    db.run(`INSERT INTO device_pins (device_id, category, name, type, gpio, unit, min_val, max_val) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [req.params.deviceId, category, name, type, Number(gpio), unit || '', min_val || 0, max_val || 255], function(err) {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ id: this.lastID, device_id: Number(req.params.deviceId), category, name, type, gpio: Number(gpio), unit, min_val, max_val });
-    });
+app.post('/api/projects/:projectId/devices', authenticateToken, async (req, res) => {
+    try {
+        const { name } = req.body;
+        const deviceToken = "esp32_" + crypto.randomBytes(6).toString('hex');
+        const result = await db.query(
+            `INSERT INTO devices (project_id, name, device_token) VALUES ($1, $2, $3) RETURNING id`,
+            [req.params.projectId, name, deviceToken]
+        );
+        res.json({ id: result.rows[0].id, name, device_token: deviceToken, pins: [] });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-app.delete('/api/pins/:id', authenticateToken, (req, res) => {
-    db.run(`DELETE FROM device_pins WHERE id = ?`, [req.params.id], function(err) {
+app.delete('/api/devices/:id', authenticateToken, async (req, res) => {
+    try {
+        await db.query(`DELETE FROM devices WHERE id = $1`, [req.params.id]);
         res.json({ deleted: true });
-    });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/devices/:deviceId/pins', authenticateToken, async (req, res) => {
+    try {
+        const { category, name, type, gpio, unit, min_val, max_val } = req.body;
+        const result = await db.query(
+            `INSERT INTO device_pins (device_id, category, name, type, gpio, unit, min_val, max_val) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+            [req.params.deviceId, category, name, type, Number(gpio), unit || '', Number(min_val) || 0, Number(max_val) || 255]
+        );
+        res.json({
+            id: result.rows[0].id,
+            device_id: Number(req.params.deviceId),
+            category, name, type,
+            gpio: Number(gpio), unit, min_val, max_val
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.delete('/api/pins/:id', authenticateToken, async (req, res) => {
+    try {
+        await db.query(`DELETE FROM device_pins WHERE id = $1`, [req.params.id]);
+        res.json({ deleted: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 const PORT = process.env.PORT || 3000;
